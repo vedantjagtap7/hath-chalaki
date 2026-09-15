@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Interactive Hand Simulation</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background-color: #07070b;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      user-select: none;
+    }
+    #canvas-container {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+    }
+    video {
+      display: none;
+    }
+    #status {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      color: rgba(255, 255, 255, 0.45);
+      font-size: 11px;
+      letter-spacing: 0.5px;
+      pointer-events: none;
+      background: rgba(0, 0, 0, 0.35);
+      padding: 6px 12px;
+      border-radius: 6px;
+      backdrop-filter: blur(4px);
+      z-index: 10;
+    }
+    #controls {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(12, 12, 18, 0.5);
+      padding: 6px 12px;
+      border-radius: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      backdrop-filter: blur(8px);
+    }
+    #controls label {
+      color: rgba(255, 255, 255, 0.45);
+      font-size: 11px;
+      font-weight: 500;
+    }
+    #controls select {
+      background: rgba(255, 255, 255, 0.06);
+      color: rgba(255, 255, 255, 0.75);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      padding: 4px 8px;
+      border-radius: 5px;
+      outline: none;
+      cursor: pointer;
+      font-size: 11px;
+    }
+    #controls select option {
+      background: #12121a;
+      color: #fff;
+    }
+
+    #watermark {
+      position: absolute;
+      bottom: 18px;
+      right: 20px;
+      text-align: right;
+      color: rgba(255, 255, 255, 0.22);
+      font-size: 10px;
+      line-height: 1.45;
+      pointer-events: none;
+      z-index: 10;
+      letter-spacing: 0.2px;
+    }
+    #watermark .marathi-text {
+      font-size: 11px;
+      font-weight: 500;
+      color: rgba(255, 255, 255, 0.28);
+      margin-bottom: 1px;
+    }
+    #watermark .meta-text {
+      font-size: 9px;
+      color: rgba(255, 255, 255, 0.18);
+    }
+  </style>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.6.0/p5.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+</head>
+<body>
+
+  <div id="status">Initializing system...</div>
+  
+  <div id="controls">
+    <label for="vis-mode">Visualization:</label>
+    <select id="vis-mode">
+      <option value="dot">Constellation Dot</option>
+      <option value="skeleton">Anatomical Skeleton</option>
+      <option value="auto">Dynamic (Per Hand)</option>
+    </select>
+  </div>
+
+  <div id="watermark">
+    <div class="marathi-text">खूप झोप त्यागली</div>
+    <div>Vedant Jagtap</div>
+    <div class="meta-text">IDC IIT Bombay</div>
+    <div class="meta-text">Sept, 2026</div>
+  </div>
+
+  <div id="canvas-container"></div>
+
+  <script>
+    let handLandmarks = [];
+    let particles = [];
+    const NUM_PARTICLES = 1200;
+    let cameraInstance = null;
+    let currentVisMode = 'dot';
+
+    const HAND_CONNECTIONS = [
+      [0, 1], [1, 2], [2, 3], [3, 4],       // Thumb
+      [0, 5], [5, 6], [6, 7], [7, 8],       // Index
+      [5, 9], [9, 10], [10, 11], [11, 12],   // Middle
+      [9, 13], [13, 14], [14, 15], [15, 16], // Ring
+      [13, 17], [0, 17], [17, 18], [18, 19], [19, 20] // Pinky
+    ];
+
+    const PALM_BASE_CONNECTIONS = [
+      [0, 5], [5, 9], [9, 13], [13, 17], [0, 17]
+    ];
+
+    const GLOW_PALETTE = [
+      { r: 42,  g: 110, b: 245 }, 
+      { r: 75,  g: 215, b: 235 }, 
+      { r: 240, g: 95,  b: 110 }, 
+      { r: 250, g: 150, b: 50 },  
+      { r: 255, g: 220, b: 70 },  
+      { r: 145, g: 100, b: 235 }  
+    ];
+
+    class Particle {
+      constructor() {
+        this.homePos = createVector(random(width), random(height));
+        this.pos = this.homePos.copy();
+        this.vel = p5.Vector.random2D().mult(random(0.1, 0.4));
+        this.acc = createVector(0, 0);
+        this.maxSpeed = 4.0;
+        this.baseSize = random(2.5, 5.5);
+
+        this.dimColor = { 
+          r: random(30, 50), 
+          g: random(35, 55), 
+          b: random(50, 75) 
+        };
+        this.glowColor = random(GLOW_PALETTE);
+        this.currentColor = { ...this.dimColor };
+        this.dimAlpha = random(40, 90);
+        this.glowAlpha = random(180, 240);
+        this.currentAlpha = this.dimAlpha;
+      }
+
+      update(landmarksList) {
+        let handActive = landmarksList.length > 0;
+
+        if (handActive) {
+          for (let hand of landmarksList) {
+            let indexTip = createVector(width - hand[8].x * width, hand[8].y * height);
+            let palmCenter = createVector(width - hand[9].x * width, hand[9].y * height);
+            let thumbTip = createVector(width - hand[4].x * width, hand[4].y * height);
+
+            let pinchDist = p5.Vector.dist(indexTip, thumbTip);
+            let isPinching = pinchDist < 45;
+
+            let targetPoint = isPinching ? indexTip : palmCenter;
+            let d = p5.Vector.dist(this.pos, targetPoint);
+            let effectRadius = isPinching ? 240 : 180;
+
+            if (d < effectRadius) {
+              let force = p5.Vector.sub(targetPoint, this.pos);
+              if (isPinching) {
+                force.setMag(map(d, 0, effectRadius, 2.8, 0.1));
+              } else {
+                force.setMag(map(d, 0, effectRadius, -3.2, -0.1));
+                let swirl = createVector(-force.y, force.x).setMag(0.9);
+                this.acc.add(swirl);
+              }
+              this.acc.add(force);
+            }
+          }
+        } else {
+          // Smooth returning force to original grid spot across screen
+          let homeForce = p5.Vector.sub(this.homePos, this.pos);
+          let homeDist = homeForce.mag();
+          if (homeDist > 2) {
+            homeForce.setMag(map(homeDist, 0, width, 0.05, 0.8));
+            this.acc.add(homeForce);
+          }
+        }
+
+        let brownian = p5.Vector.random2D().mult(0.2);
+        this.acc.add(brownian);
+
+        // Smooth color interpolation
+        let targetColor = handActive ? this.glowColor : this.dimColor;
+        let targetAlpha = handActive ? this.glowAlpha : this.dimAlpha;
+
+        this.currentColor.r = lerp(this.currentColor.r, targetColor.r, 0.04);
+        this.currentColor.g = lerp(this.currentColor.g, targetColor.g, 0.04);
+        this.currentColor.b = lerp(this.currentColor.b, targetColor.b, 0.04);
+        this.currentAlpha = lerp(this.currentAlpha, targetAlpha, 0.04);
+
+        this.vel.add(this.acc);
+        this.vel.limit(this.maxSpeed);
+        this.pos.add(this.vel);
+        this.acc.mult(0);
+        this.vel.mult(0.94);
+      }
+
+      display() {
+        noStroke();
+        fill(this.currentColor.r, this.currentColor.g, this.currentColor.b, this.currentAlpha);
+        ellipse(this.pos.x, this.pos.y, this.baseSize, this.baseSize);
+      }
+    }
+
+    function setup() {
+      let canvas = createCanvas(windowWidth, windowHeight);
+      canvas.parent('canvas-container');
+
+      for (let i = 0; i < NUM_PARTICLES; i++) {
+        particles.push(new Particle());
+      }
+
+      document.getElementById('vis-mode').addEventListener('change', (e) => {
+        currentVisMode = e.target.value;
+      });
+
+      initCameraAndMediaPipe();
+    }
+
+    function draw() {
+      background(7, 7, 11, 210);
+
+      for (let particle of particles) {
+        particle.update(handLandmarks);
+        particle.display();
+      }
+
+      drawHandVisualizations();
+    }
+
+    function drawHandVisualizations() {
+      if (handLandmarks.length === 0) return;
+
+      const modes = ['dot', 'skeleton'];
+
+      for (let handIndex = 0; handIndex < handLandmarks.length; handIndex++) {
+        let hand = handLandmarks[handIndex];
+        let mode = currentVisMode;
+
+        if (mode === 'auto') {
+          mode = modes[handIndex % modes.length];
+        }
+
+        if (mode === 'dot') {
+          renderConstellationHand(hand);
+        } else if (mode === 'skeleton') {
+          renderAnatomicalBoneHand(hand);
+        }
+      }
+    }
+
+    // --- MODE 1: CONSTELLATION / DOT ART HAND ---
+    function renderConstellationHand(hand) {
+      push();
+      // White connective skeleton lines
+      stroke(255, 255, 255, 220);
+      strokeWeight(1.8);
+
+      for (let pair of HAND_CONNECTIONS) {
+        let p1 = hand[pair[0]];
+        let p2 = hand[pair[1]];
+        line(width - p1.x * width, p1.y * height, width - p2.x * width, p2.y * height);
+      }
+
+      for (let pair of PALM_BASE_CONNECTIONS) {
+        let p1 = hand[pair[0]];
+        let p2 = hand[pair[1]];
+        line(width - p1.x * width, p1.y * height, width - p2.x * width, p2.y * height);
+      }
+
+      // Constellation joint dots
+      for (let pt of hand) {
+        let x = width - pt.x * width;
+        let y = pt.y * height;
+
+        // Outer dark ring halo
+        noFill();
+        stroke(0, 0, 0, 180);
+        strokeWeight(2.5);
+        ellipse(x, y, 10, 10);
+
+        // Core dot
+        noStroke();
+        fill(255, 255, 255, 240);
+        ellipse(x, y, 6, 6);
+      }
+      pop();
+    }
+
+    // --- MODE 2: REFINED ANATOMICAL SKELETON HAND ---
+    function renderAnatomicalBoneHand(hand) {
+      push();
+      fill(245, 247, 250, 235);
+      noStroke();
+
+      // Phalanx bone segments
+      for (let pair of HAND_CONNECTIONS) {
+        let p1 = hand[pair[0]];
+        let p2 = hand[pair[1]];
+
+        let x1 = width - p1.x * width;
+        let y1 = p1.y * height;
+        let x2 = width - p2.x * width;
+        let y2 = p2.y * height;
+
+        let d = dist(x1, y1, x2, y2);
+        let angle = atan2(y2 - y1, x2 - x1);
+
+        push();
+        translate((x1 + x2) / 2, (y1 + y2) / 2);
+        rotate(angle);
+        rectMode(CENTER);
+
+        let boneLen = max(d - 6, 4);
+        let thick = map(pair[0], 0, 20, 9, 4.5);
+
+        // Rounded anatomical silhouette bone shape
+        rect(0, 0, boneLen, thick, thick / 2);
+        pop();
+      }
+
+      // Joint heads
+      for (let pt of hand) {
+        let x = width - pt.x * width;
+        let y = pt.y * height;
+        ellipse(x, y, 7, 7);
+      }
+      pop();
+    }
+
+    async function initCameraAndMediaPipe() {
+      const statusEl = document.getElementById('status');
+      
+      try {
+        statusEl.innerText = "Requesting camera access...";
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: 1280, height: 720, facingMode: "user" }
+        });
+
+        const videoElement = document.createElement('video');
+        videoElement.srcObject = stream;
+        videoElement.setAttribute('playsinline', '');
+        await videoElement.play();
+
+        statusEl.innerText = "Loading multi-hand tracking...";
+        const hands = new Hands({
+          locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+        });
+
+        hands.setOptions({
+          maxNumHands: 4,
+          modelComplexity: 1,
+          minDetectionConfidence: 0.5,
+          minTrackingConfidence: 0.5
+        });
+
+        hands.onResults((results) => {
+          statusEl.style.display = 'none';
+          handLandmarks = results.multiHandLandmarks || [];
+        });
+
+        cameraInstance = new Camera(videoElement, {
+          onFrame: async () => {
+            await hands.send({ image: videoElement });
+          },
+          width: 1280,
+          height: 720
+        });
+
+        await cameraInstance.start();
+
+      } catch (err) {
+        console.error("Camera access error:", err);
+        statusEl.innerText = "Camera access error. Run via HTTPS or localhost.";
+      }
+    }
+
+    function windowResized() {
+      resizeCanvas(windowWidth, windowHeight);
+    }
+  </script>
+</body>
+</html>

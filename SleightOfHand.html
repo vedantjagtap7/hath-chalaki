@@ -1,0 +1,715 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Sleight of Hand - Interactive Masterpiece Reveal</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background-color: #07070b;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      user-select: none;
+    }
+    #canvas-container {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+    }
+    video {
+      display: none;
+    }
+    #status {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      color: rgba(255, 255, 255, 0.45);
+      font-size: 11px;
+      letter-spacing: 0.5px;
+      pointer-events: none;
+      background: rgba(0, 0, 0, 0.35);
+      padding: 6px 12px;
+      border-radius: 6px;
+      backdrop-filter: blur(4px);
+      z-index: 10;
+    }
+    #controls {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(12, 12, 18, 0.5);
+      padding: 6px 12px;
+      border-radius: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      backdrop-filter: blur(8px);
+    }
+    #controls label {
+      color: rgba(255, 255, 255, 0.45);
+      font-size: 11px;
+      font-weight: 500;
+    }
+    #controls select {
+      background: rgba(255, 255, 255, 0.06);
+      color: rgba(255, 255, 255, 0.75);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      padding: 4px 8px;
+      border-radius: 5px;
+      outline: none;
+      cursor: pointer;
+      font-size: 11px;
+    }
+    #controls select option {
+      background: #12121a;
+      color: #fff;
+    }
+
+    #pattern-title {
+      position: absolute;
+      bottom: 20px;
+      left: 20px;
+      color: rgba(255, 255, 255, 0.6);
+      font-size: 12px;
+      letter-spacing: 1px;
+      pointer-events: none;
+      background: rgba(0, 0, 0, 0.4);
+      padding: 6px 14px;
+      border-radius: 6px;
+      backdrop-filter: blur(4px);
+      z-index: 10;
+      text-transform: uppercase;
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      display: none;
+    }
+
+    #watermark {
+      position: absolute;
+      bottom: 18px;
+      right: 20px;
+      text-align: right;
+      color: rgba(255, 255, 255, 0.22);
+      font-size: 10px;
+      line-height: 1.45;
+      pointer-events: none;
+      z-index: 10;
+      letter-spacing: 0.2px;
+    }
+    #watermark .marathi-text {
+      font-size: 11px;
+      font-weight: 500;
+      color: rgba(255, 255, 255, 0.28);
+      margin-bottom: 1px;
+    }
+    #watermark .meta-text {
+      font-size: 9px;
+      color: rgba(255, 255, 255, 0.18);
+    }
+  </style>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.6.0/p5.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+</head>
+<body>
+
+  <div id="status">Initializing system...</div>
+  <div id="pattern-title">Pattern: Metatron's Sacred Cube</div>
+  
+  <div id="controls">
+    <label for="vis-mode">Visualization Mode:</label>
+    <select id="vis-mode">
+      <option value="dot">Constellation Dot</option>
+      <option value="skeleton">Anatomical Skeleton</option>
+      <option value="art">Masterpiece Reveal (Dot Art)</option>
+    </select>
+  </div>
+
+  <div id="watermark">
+    <div class="marathi-text">खूप झोप त्यागली</div>
+    <div>Vedant Jagtap</div>
+    <div class="meta-text">IDC IIT Bombay</div>
+    <div class="meta-text">Sept, 2026</div>
+  </div>
+
+  <div id="canvas-container"></div>
+
+  <script>
+    let handLandmarks = [];
+    let particles = [];
+    const NUM_PARTICLES = 1800;
+    let cameraInstance = null;
+    let currentVisMode = 'dot';
+
+    // Dot Art State Management
+    let currentPatternIndex = 0;
+    let lastPatternSwitchTime = 0;
+    const PATTERN_SWITCH_INTERVAL = 30000; // 30 seconds
+    let dotPatterns = [];
+
+    const HAND_CONNECTIONS = [
+      [0, 1], [1, 2], [2, 3], [3, 4],       // Thumb
+      [0, 5], [5, 6], [6, 7], [7, 8],       // Index
+      [5, 9], [9, 10], [10, 11], [11, 12],   // Middle
+      [9, 13], [13, 14], [14, 15], [15, 16], // Ring
+      [13, 17], [0, 17], [17, 18], [18, 19], [19, 20] // Pinky
+    ];
+
+    const PALM_BASE_CONNECTIONS = [
+      [0, 5], [5, 9], [9, 13], [13, 17], [0, 17]
+    ];
+
+    const GLOW_PALETTE = [
+      { r: 42,  g: 110, b: 245 }, 
+      { r: 75,  g: 215, b: 235 }, 
+      { r: 240, g: 95,  b: 110 }, 
+      { r: 250, g: 150, b: 50 },  
+      { r: 255, g: 220, b: 70 },  
+      { r: 145, g: 100, b: 235 }  
+    ];
+
+    // Advanced Mathematical Geometric Patterns
+    function initDotPatterns() {
+      dotPatterns = [
+        {
+          name: "Metatron's Sacred Cube Geometry",
+          setupTargets: () => {
+            let targets = [];
+            let cx = width / 2;
+            let cy = height / 2;
+            let r = min(width, height) * 0.16;
+            
+            // 13 Circle Centers of Metatron's Cube
+            let centers = [{x: cx, y: cy}];
+            for (let i = 0; i < 6; i++) {
+              let a = (TWO_PI / 6) * i;
+              centers.push({ x: cx + cos(a) * r, y: cy + sin(a) * r });
+              centers.push({ x: cx + cos(a) * r * 2, y: cy + sin(a) * r * 2 });
+            }
+
+            for (let i = 0; i < NUM_PARTICLES; i++) {
+              let pt;
+              if (i < 1000) {
+                // Circle boundaries and inner field
+                let c = centers[i % centers.length];
+                let a = random(TWO_PI);
+                let distR = (random() > 0.4) ? r * 0.45 : random(r * 0.45);
+                pt = { x: c.x + cos(a) * distR, y: c.y + sin(a) * distR };
+              } else {
+                // Interconnecting geometry lines
+                let c1 = centers[i % centers.length];
+                let c2 = centers[(i * 7) % centers.length];
+                let t = random(1);
+                pt = { x: lerp(c1.x, c2.x, t), y: lerp(c1.y, c2.y, t) };
+              }
+
+              targets.push({
+                x: pt.x,
+                y: pt.y,
+                color: {
+                  r: map(sin(pt.x * 0.01), -1, 1, 100, 255),
+                  g: map(cos(pt.y * 0.01), -1, 1, 180, 240),
+                  b: 255
+                }
+              });
+            }
+            return targets;
+          }
+        },
+        {
+          name: "Rhodonea Mathematical Rose Curve (k=7/4)",
+          setupTargets: () => {
+            let targets = [];
+            let cx = width / 2;
+            let cy = height / 2;
+            let maxR = min(width, height) * 0.38;
+            let k = 7 / 4;
+
+            for (let i = 0; i < NUM_PARTICLES; i++) {
+              let theta = map(i, 0, NUM_PARTICLES, 0, TWO_PI * 4);
+              let radius = maxR * cos(k * theta);
+              let spread = random(-12, 12);
+
+              let x = cx + (radius + spread) * cos(theta);
+              let y = cy + (radius + spread) * sin(theta);
+
+              targets.push({
+                x: x,
+                y: y,
+                color: {
+                  r: map(sin(theta), -1, 1, 220, 255),
+                  g: map(cos(theta * 2), -1, 1, 80, 180),
+                  b: map(sin(radius), -1, 1, 150, 255)
+                }
+              });
+            }
+            return targets;
+          }
+        },
+        {
+          name: "Hypotrochoid Harmonic Spirograph",
+          setupTargets: () => {
+            let targets = [];
+            let cx = width / 2;
+            let cy = height / 2;
+            let R = 180, r = 80, d = 120;
+
+            for (let i = 0; i < NUM_PARTICLES; i++) {
+              let theta = map(i, 0, NUM_PARTICLES, 0, TWO_PI * 8);
+              let x = cx + (R - r) * cos(theta) + d * cos(((R - r) * theta) / r);
+              let y = cy + (R - r) * sin(theta) - d * sin(((R - r) * theta) / r);
+
+              // Radial jitter
+              x += random(-4, 4);
+              y += random(-4, 4);
+
+              targets.push({
+                x: x,
+                y: y,
+                color: {
+                  r: map(cos(theta), -1, 1, 80, 240),
+                  g: map(sin(theta * 3), -1, 1, 180, 255),
+                  b: map(cos(theta * 0.5), -1, 1, 120, 220)
+                }
+              });
+            }
+            return targets;
+          }
+        },
+        {
+          name: "Fibonacci Sacred Golden Spiral",
+          setupTargets: () => {
+            let targets = [];
+            let cx = width / 2;
+            let cy = height / 2;
+            let goldenAngle = 137.508 * (PI / 180);
+            let maxRadius = min(width, height) * 0.42;
+
+            for (let i = 0; i < NUM_PARTICLES; i++) {
+              let r = sqrt(i / NUM_PARTICLES) * maxRadius;
+              let theta = i * goldenAngle;
+              let x = cx + r * cos(theta);
+              let y = cy + r * sin(theta);
+
+              let hueVal = (i % 360) / 360;
+              targets.push({
+                x: x,
+                y: y,
+                color: {
+                  r: 120 + 135 * sin(hueVal * TWO_PI),
+                  g: 180 + 75 * cos(hueVal * TWO_PI),
+                  b: 220 + 35 * sin(hueVal * TWO_PI + PI)
+                }
+              });
+            }
+            return targets;
+          }
+        },
+        {
+          name: "Lissajous 3D Harmonic Curve",
+          setupTargets: () => {
+            let targets = [];
+            let cx = width / 2;
+            let cy = height / 2;
+            let scaleX = min(width, height) * 0.38;
+            let scaleY = min(width, height) * 0.32;
+            let a = 3, b = 4, delta = PI / 2;
+
+            for (let i = 0; i < NUM_PARTICLES; i++) {
+              let t = map(i, 0, NUM_PARTICLES, 0, TWO_PI);
+              let x = cx + scaleX * sin(a * t + delta);
+              let y = cy + scaleY * sin(b * t);
+
+              // Thickness displacement along normal vector
+              let offset = random(-8, 8);
+              x += offset * cos(t);
+              y += offset * sin(t);
+
+              targets.push({
+                x: x,
+                y: y,
+                color: {
+                  r: map(sin(t * 4), -1, 1, 240, 90),
+                  g: map(cos(t * 2), -1, 1, 110, 255),
+                  b: map(sin(t), -1, 1, 160, 240)
+                }
+              });
+            }
+            return targets;
+          }
+        },
+        {
+          name: "Swirling Cosmic Spiral Galaxy",
+          setupTargets: () => {
+            let targets = [];
+            let cx = width / 2;
+            let cy = height / 2;
+            let arms = 5;
+            let maxRadius = min(width, height) * 0.44;
+
+            for (let i = 0; i < NUM_PARTICLES; i++) {
+              let distance = random(0.02, 1);
+              let r = distance * maxRadius;
+              let armAngle = ((i % arms) * TWO_PI) / arms;
+              let spiralAngle = armAngle + (1 / distance) * 0.6;
+
+              let offsetX = random(-18, 18) * (1 - distance * 0.5);
+              let offsetY = random(-18, 18) * (1 - distance * 0.5);
+
+              targets.push({
+                x: cx + r * cos(spiralAngle) + offsetX,
+                y: cy + r * sin(spiralAngle) + offsetY,
+                color: {
+                  r: lerp(255, 60, distance),
+                  g: lerp(200, 140, distance),
+                  b: lerp(120, 255, distance)
+                }
+              });
+            }
+            return targets;
+          }
+        }
+      ];
+    }
+
+    function updatePatternTargets() {
+      let targets = dotPatterns[currentPatternIndex].setupTargets();
+      for (let i = 0; i < particles.length; i++) {
+        if (targets[i]) {
+          particles[i].targetPatternPos = createVector(targets[i].x, targets[i].y);
+          particles[i].targetColor = targets[i].color;
+        }
+      }
+      let titleEl = document.getElementById('pattern-title');
+      if (titleEl) {
+        titleEl.innerText = "Pattern: " + dotPatterns[currentPatternIndex].name;
+      }
+    }
+
+    class Particle {
+      constructor() {
+        this.homePos = createVector(random(width), random(height));
+        this.pos = this.homePos.copy();
+        this.targetPatternPos = this.homePos.copy();
+        this.vel = p5.Vector.random2D().mult(random(0.1, 0.4));
+        this.acc = createVector(0, 0);
+        this.maxSpeed = 5.5;
+        this.baseSize = random(2.5, 5.2);
+
+        this.dimColor = { 
+          r: random(30, 50), 
+          g: random(35, 55), 
+          b: random(50, 75) 
+        };
+        this.glowColor = random(GLOW_PALETTE);
+        this.targetColor = { ...this.dimColor };
+        this.currentColor = { ...this.dimColor };
+        this.dimAlpha = random(40, 90);
+        this.glowAlpha = random(180, 240);
+        this.currentAlpha = this.dimAlpha;
+      }
+
+      update(landmarksList) {
+        let handActive = landmarksList.length > 0;
+
+        if (currentVisMode === 'art') {
+          // --- PATTERN REVEAL LOGIC ---
+          let isAwakened = false;
+
+          if (handActive) {
+            for (let hand of landmarksList) {
+              let palmCenter = createVector(width - hand[9].x * width, hand[9].y * height);
+              let indexTip = createVector(width - hand[8].x * width, hand[8].y * height);
+              
+              let d = min(p5.Vector.dist(this.pos, palmCenter), p5.Vector.dist(this.pos, indexTip));
+              
+              if (d < 220) {
+                isAwakened = true;
+                // Magnetic pull towards mathematical target coordinate
+                let patternForce = p5.Vector.sub(this.targetPatternPos, this.pos);
+                patternForce.mult(0.12);
+                this.acc.add(patternForce);
+              }
+            }
+          }
+
+          if (isAwakened) {
+            this.currentColor.r = lerp(this.currentColor.r, this.targetColor.r, 0.1);
+            this.currentColor.g = lerp(this.currentColor.g, this.targetColor.g, 0.1);
+            this.currentColor.b = lerp(this.currentColor.b, this.targetColor.b, 0.1);
+            this.currentAlpha = lerp(this.currentAlpha, 240, 0.1);
+          } else {
+            // Idle drift back to home coordinates with low opacity
+            let homeForce = p5.Vector.sub(this.homePos, this.pos);
+            if (homeForce.mag() > 5) {
+              homeForce.setMag(0.25);
+              this.acc.add(homeForce);
+            }
+            this.currentColor.r = lerp(this.currentColor.r, this.dimColor.r, 0.04);
+            this.currentColor.g = lerp(this.currentColor.g, this.dimColor.g, 0.04);
+            this.currentColor.b = lerp(this.currentColor.b, this.dimColor.b, 0.04);
+            this.currentAlpha = lerp(this.currentAlpha, this.dimAlpha, 0.04);
+          }
+
+        } else {
+          // --- STANDARD DYNAMIC FORCE LOGIC ---
+          if (handActive) {
+            for (let hand of landmarksList) {
+              let indexTip = createVector(width - hand[8].x * width, hand[8].y * height);
+              let palmCenter = createVector(width - hand[9].x * width, hand[9].y * height);
+              let thumbTip = createVector(width - hand[4].x * width, hand[4].y * height);
+
+              let pinchDist = p5.Vector.dist(indexTip, thumbTip);
+              let isPinching = pinchDist < 45;
+
+              let targetPoint = isPinching ? indexTip : palmCenter;
+              let d = p5.Vector.dist(this.pos, targetPoint);
+              let effectRadius = isPinching ? 240 : 180;
+
+              if (d < effectRadius) {
+                let force = p5.Vector.sub(targetPoint, this.pos);
+                if (isPinching) {
+                  force.setMag(map(d, 0, effectRadius, 2.8, 0.1));
+                } else {
+                  force.setMag(map(d, 0, effectRadius, -3.2, -0.1));
+                  let swirl = createVector(-force.y, force.x).setMag(0.9);
+                  this.acc.add(swirl);
+                }
+                this.acc.add(force);
+              }
+            }
+          } else {
+            let homeForce = p5.Vector.sub(this.homePos, this.pos);
+            let homeDist = homeForce.mag();
+            if (homeDist > 2) {
+              homeForce.setMag(map(homeDist, 0, width, 0.05, 0.8));
+              this.acc.add(homeForce);
+            }
+          }
+
+          let activeColor = handActive ? this.glowColor : this.dimColor;
+          let activeAlpha = handActive ? this.glowAlpha : this.dimAlpha;
+
+          this.currentColor.r = lerp(this.currentColor.r, activeColor.r, 0.04);
+          this.currentColor.g = lerp(this.currentColor.g, activeColor.g, 0.04);
+          this.currentColor.b = lerp(this.currentColor.b, activeColor.b, 0.04);
+          this.currentAlpha = lerp(this.currentAlpha, activeAlpha, 0.04);
+        }
+
+        // Ambient Brownian motion drift
+        let brownian = p5.Vector.random2D().mult(0.25);
+        this.acc.add(brownian);
+
+        this.vel.add(this.acc);
+        this.vel.limit(this.maxSpeed);
+        this.pos.add(this.vel);
+        this.acc.mult(0);
+        this.vel.mult(0.92);
+      }
+
+      display() {
+        noStroke();
+        fill(this.currentColor.r, this.currentColor.g, this.currentColor.b, this.currentAlpha);
+        ellipse(this.pos.x, this.pos.y, this.baseSize, this.baseSize);
+      }
+    }
+
+    function setup() {
+      let canvas = createCanvas(windowWidth, windowHeight);
+      canvas.parent('canvas-container');
+
+      initDotPatterns();
+
+      for (let i = 0; i < NUM_PARTICLES; i++) {
+        particles.push(new Particle());
+      }
+
+      updatePatternTargets();
+
+      let visSelect = document.getElementById('vis-mode');
+      let titleEl = document.getElementById('pattern-title');
+
+      visSelect.addEventListener('change', (e) => {
+        currentVisMode = e.target.value;
+        if (currentVisMode === 'art') {
+          titleEl.style.display = 'block';
+        } else {
+          titleEl.style.display = 'none';
+        }
+      });
+
+      lastPatternSwitchTime = millis();
+      initCameraAndMediaPipe();
+    }
+
+    function draw() {
+      background(7, 7, 11, 210);
+
+      // Automatically switch Dot Art pattern every 30 seconds
+      if (millis() - lastPatternSwitchTime > PATTERN_SWITCH_INTERVAL) {
+        currentPatternIndex = (currentPatternIndex + 1) % dotPatterns.length;
+        updatePatternTargets();
+        lastPatternSwitchTime = millis();
+      }
+
+      for (let particle of particles) {
+        particle.update(handLandmarks);
+        particle.display();
+      }
+
+      // Render hand overlays only in Dot and Skeleton modes
+      if (currentVisMode !== 'art') {
+        drawHandVisualizations();
+      }
+    }
+
+    function drawHandVisualizations() {
+      if (handLandmarks.length === 0) return;
+
+      for (let handIndex = 0; handIndex < handLandmarks.length; handIndex++) {
+        let hand = handLandmarks[handIndex];
+        if (currentVisMode === 'dot') {
+          renderConstellationHand(hand);
+        } else if (currentVisMode === 'skeleton') {
+          renderAnatomicalBoneHand(hand);
+        }
+      }
+    }
+
+    // --- MODE 1: CONSTELLATION / DOT ART HAND ---
+    function renderConstellationHand(hand) {
+      push();
+      stroke(255, 255, 255, 220);
+      strokeWeight(1.8);
+
+      for (let pair of HAND_CONNECTIONS) {
+        let p1 = hand[pair[0]];
+        let p2 = hand[pair[1]];
+        line(width - p1.x * width, p1.y * height, width - p2.x * width, p2.y * height);
+      }
+
+      for (let pair of PALM_BASE_CONNECTIONS) {
+        let p1 = hand[pair[0]];
+        let p2 = hand[pair[1]];
+        line(width - p1.x * width, p1.y * height, width - p2.x * width, p2.y * height);
+      }
+
+      for (let pt of hand) {
+        let x = width - pt.x * width;
+        let y = pt.y * height;
+
+        noFill();
+        stroke(0, 0, 0, 180);
+        strokeWeight(2.5);
+        ellipse(x, y, 10, 10);
+
+        noStroke();
+        fill(255, 255, 255, 240);
+        ellipse(x, y, 6, 6);
+      }
+      pop();
+    }
+
+    // --- MODE 2: REFINED ANATOMICAL SKELETON HAND ---
+    function renderAnatomicalBoneHand(hand) {
+      push();
+      fill(245, 247, 250, 235);
+      noStroke();
+
+      for (let pair of HAND_CONNECTIONS) {
+        let p1 = hand[pair[0]];
+        let p2 = hand[pair[1]];
+
+        let x1 = width - p1.x * width;
+        let y1 = p1.y * height;
+        let x2 = width - p2.x * width;
+        let y2 = p2.y * height;
+
+        let d = dist(x1, y1, x2, y2);
+        let angle = atan2(y2 - y1, x2 - x1);
+
+        push();
+        translate((x1 + x2) / 2, (y1 + y2) / 2);
+        rotate(angle);
+        rectMode(CENTER);
+
+        let boneLen = max(d - 6, 4);
+        let thick = map(pair[0], 0, 20, 9, 4.5);
+
+        rect(0, 0, boneLen, thick, thick / 2);
+        pop();
+      }
+
+      for (let pt of hand) {
+        let x = width - pt.x * width;
+        let y = pt.y * height;
+        ellipse(x, y, 7, 7);
+      }
+      pop();
+    }
+
+    async function initCameraAndMediaPipe() {
+      const statusEl = document.getElementById('status');
+      
+      try {
+        statusEl.innerText = "Requesting camera access...";
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: 1280, height: 720, facingMode: "user" }
+        });
+
+        const videoElement = document.createElement('video');
+        videoElement.srcObject = stream;
+        videoElement.setAttribute('playsinline', '');
+        await videoElement.play();
+
+        statusEl.innerText = "Loading multi-hand tracking...";
+        const hands = new Hands({
+          locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+        });
+
+        hands.setOptions({
+          maxNumHands: 4,
+          modelComplexity: 1,
+          minDetectionConfidence: 0.5,
+          minTrackingConfidence: 0.5
+        });
+
+        hands.onResults((results) => {
+          statusEl.style.display = 'none';
+          handLandmarks = results.multiHandLandmarks || [];
+        });
+
+        cameraInstance = new Camera(videoElement, {
+          onFrame: async () => {
+            await hands.send({ image: videoElement });
+          },
+          width: 1280,
+          height: 720
+        });
+
+        await cameraInstance.start();
+
+      } catch (err) {
+        console.error("Camera access error:", err);
+        statusEl.innerText = "Camera access error. Run via HTTPS or localhost.";
+      }
+    }
+
+    function windowResized() {
+      resizeCanvas(windowWidth, windowHeight);
+      initDotPatterns();
+      updatePatternTargets();
+    }
+  </script>
+</body>
+</html>
